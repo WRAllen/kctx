@@ -1,0 +1,8 @@
+kubeconfig_dir: /Users/you/.kube
+alias:
+  name: AMS_ENV
+  values:
+    a800: sco-dev-sh01-bmsk8s
+    dev04: sco-dev-04
+    yc-dev: sco-dev-yc01-bmsk8s
+    sh02-prod-minimax: sco-prod-sh02-bmsk8s-02
