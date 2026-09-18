@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/WRAllen/kctx/internal/config"
 )
 
 func TestRunFiltersAndMapsEnvironment(t *testing.T) {
@@ -45,5 +47,51 @@ func TestConfigHelpReturnsSuccess(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Usage: kctx config") {
 		t.Fatalf("help output is missing usage: %s", stderr.String())
+	}
+}
+
+func TestAliasSetAndClear(t *testing.T) {
+	tests := []struct {
+		name      string
+		clearArgs []string
+	}{
+		{name: "omitted value", clearArgs: nil},
+		{name: "empty value", clearArgs: []string{""}},
+		{name: "blank value", clearArgs: []string{"   "}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			var stdout, stderr bytes.Buffer
+			setArgs := []string{"alias", "set", "--config", configPath, "dev-cluster", "development"}
+			if exitCode := Run(setArgs, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
+				t.Fatalf("set exit code = %d, stderr = %s", exitCode, stderr.String())
+			}
+
+			settings, err := config.Load(configPath, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settings.Alias.Values["dev-cluster"] != "development" {
+				t.Fatalf("alias was not set: %#v", settings.Alias.Values)
+			}
+
+			stdout.Reset()
+			stderr.Reset()
+			clearArgs := []string{"alias", "set", "--config", configPath, "dev-cluster"}
+			clearArgs = append(clearArgs, test.clearArgs...)
+			if exitCode := Run(clearArgs, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
+				t.Fatalf("clear exit code = %d, stderr = %s", exitCode, stderr.String())
+			}
+
+			settings, err = config.Load(configPath, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := settings.Alias.Values["dev-cluster"]; exists {
+				t.Fatalf("alias was not cleared: %#v", settings.Alias.Values)
+			}
+		})
 	}
 }

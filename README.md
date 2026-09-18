@@ -129,6 +129,26 @@ kctx readonly
 kctx dev
 ```
 
+单独设置一个 context 的别名：
+
+```bash
+kctx alias set dev-cluster development
+```
+
+省略别名值、传入空字符串或全空格时，会清除这个 context 的别名：
+
+```bash
+kctx alias set dev-cluster
+kctx alias set dev-cluster ""
+kctx alias set dev-cluster "   "
+```
+
+别名中包含空格时需要使用引号：
+
+```bash
+kctx alias set dev-cluster "development cluster"
+```
+
 临时扫描另一个目录，不改变保存的默认设置：
 
 ```bash
@@ -169,4 +189,5 @@ JSON 中别名使用通用结构：
 kctx --version
 kctx --help
 kctx config --help
+kctx alias set --help
 ```

@@ -15,7 +15,7 @@ import (
 	"github.com/WRAllen/kctx/internal/setup"
 )
 
-const Version = "0.1.0"
+const Version = "0.3.0"
 
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	home, err := os.UserHomeDir()
@@ -29,6 +29,9 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	legacyPath := filepath.Join(defaultKubeDir, "ams-env-map")
 	if len(args) > 0 && args[0] == "config" {
 		return runConfig(args[1:], stdin, stdout, stderr, defaultConfigPath, defaultKubeDir, legacyPath)
+	}
+	if len(args) > 0 && args[0] == "alias" {
+		return runAlias(args[1:], stdout, stderr, defaultConfigPath, legacyPath)
 	}
 	return runList(args, stdout, stderr, defaultConfigPath, defaultKubeDir, legacyPath)
 }
@@ -44,6 +47,7 @@ func runList(args []string, stdout, stderr io.Writer, defaultConfigPath, default
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: kctx [options] [context keyword]")
 		fmt.Fprintln(stderr, "       kctx config [--config path]")
+		fmt.Fprintln(stderr, "       kctx alias set [--config path] <context> [value]")
 		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "List kubeconfig files and their contexts. The keyword match is case-insensitive.")
 		fmt.Fprintln(stderr)
@@ -121,6 +125,66 @@ func runList(args []string, stdout, stderr io.Writer, defaultConfigPath, default
 	if err != nil {
 		fmt.Fprintf(stderr, "kctx: write output: %v\n", err)
 		return 1
+	}
+	return 0
+}
+
+func runAlias(args []string, stdout, stderr io.Writer, defaultConfigPath, legacyPath string) int {
+	if len(args) == 0 || args[0] != "set" {
+		fmt.Fprintln(stderr, "Usage: kctx alias set [--config path] <context> [value]")
+		return 2
+	}
+
+	flags := flag.NewFlagSet("kctx alias set", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", defaultConfigPath, "configuration file to edit")
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, "Usage: kctx alias set [--config path] <context> [value]")
+		fmt.Fprintln(stderr)
+		fmt.Fprintln(stderr, "Set one context alias. An omitted or blank value clears the alias.")
+		fmt.Fprintln(stderr)
+		flags.PrintDefaults()
+	}
+	if err := flags.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if flags.NArg() < 1 {
+		flags.Usage()
+		return 2
+	}
+
+	contextName := strings.TrimSpace(flags.Arg(0))
+	if contextName == "" {
+		fmt.Fprintln(stderr, "kctx alias set: context cannot be blank")
+		return 2
+	}
+	value := strings.TrimSpace(strings.Join(flags.Args()[1:], " "))
+
+	settings, err := config.Load(*configPath, legacyPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "kctx alias set: %v\n", err)
+		return 1
+	}
+	if settings.Alias.Values == nil {
+		settings.Alias.Values = make(map[string]string)
+	}
+	if value == "" {
+		delete(settings.Alias.Values, contextName)
+	} else {
+		settings.Alias.Values[contextName] = value
+	}
+	if err := config.Save(*configPath, settings); err != nil {
+		fmt.Fprintf(stderr, "kctx alias set: %v\n", err)
+		return 1
+	}
+
+	if value == "" {
+		fmt.Fprintf(stdout, "Cleared alias for %s\n", contextName)
+	} else {
+		fmt.Fprintf(stdout, "Set alias for %s to %s\n", contextName, value)
 	}
 	return 0
 }
