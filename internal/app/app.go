@@ -15,7 +15,7 @@ import (
 	"github.com/WRAllen/kctx/internal/setup"
 )
 
-const Version = "0.3.0"
+const Version = "0.2.0"
 
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	home, err := os.UserHomeDir()
