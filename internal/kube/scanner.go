@@ -44,22 +44,12 @@ func Scan(dir string) ([]Context, error) {
 			continue
 		}
 
-		data, err := os.ReadFile(path)
+		names, err := ContextNames(path)
 		if err != nil {
 			continue
 		}
 
-		var config kubeconfig
-		if err := yaml.Unmarshal(data, &config); err != nil {
-			continue
-		}
-
-		for _, item := range config.Contexts {
-			name := strings.TrimSpace(item.Name)
-			if name == "" {
-				continue
-			}
-
+		for _, name := range names {
 			key := name + "\x00" + path
 			if _, ok := seen[key]; ok {
 				continue
@@ -77,4 +67,32 @@ func Scan(dir string) ([]Context, error) {
 	})
 
 	return contexts, nil
+}
+
+// ContextNames returns the context names declared by one kubeconfig file.
+func ContextNames(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read kubeconfig %q: %w", path, err)
+	}
+
+	var config kubeconfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("parse kubeconfig %q: %w", path, err)
+	}
+
+	names := make([]string, 0, len(config.Contexts))
+	seen := make(map[string]struct{})
+	for _, item := range config.Contexts {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names, nil
 }

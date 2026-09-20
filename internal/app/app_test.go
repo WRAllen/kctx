@@ -95,3 +95,67 @@ func TestAliasSetAndClear(t *testing.T) {
 		})
 	}
 }
+
+func TestContextRenameUpdatesFileAndAlias(t *testing.T) {
+	dir := t.TempDir()
+	kubeDir := filepath.Join(dir, "kube")
+	if err := os.Mkdir(kubeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kubeconfigPath := filepath.Join(kubeDir, "new-cluster.yaml")
+	kubeconfig := "apiVersion: v1\ncontexts:\n  - name: old-context\n    context:\n      cluster: cluster-one\ncurrent-context: old-context\n"
+	if err := os.WriteFile(kubeconfigPath, []byte(kubeconfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "config.yaml")
+	configData := "kubeconfig_dir: " + kubeDir + "\nalias:\n  name: ENVIRONMENT\n  values:\n    old-context: development\n"
+	if err := os.WriteFile(configPath, []byte(configData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"context", "rename", "--config", configPath, "new-cluster.yaml", "new-context"}
+	if exitCode := Run(args, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
+		t.Fatalf("rename exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	data, err := os.ReadFile(kubeconfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "old-context") || !strings.Contains(string(data), "current-context: new-context") {
+		t.Fatalf("kubeconfig was not renamed correctly:\n%s", data)
+	}
+	settings, err := config.Load(configPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := settings.Alias.Values["old-context"]; exists {
+		t.Fatalf("old alias key remains: %#v", settings.Alias.Values)
+	}
+	if settings.Alias.Values["new-context"] != "development" {
+		t.Fatalf("alias was not migrated: %#v", settings.Alias.Values)
+	}
+}
+
+func TestContextRenameRejectsMultipleContextsInFile(t *testing.T) {
+	dir := t.TempDir()
+	content := "contexts:\n  - name: context-one\n  - name: context-two\n"
+	if err := os.WriteFile(filepath.Join(dir, "multiple.yaml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	configData := "kubeconfig_dir: " + dir + "\nalias:\n  name: ENVIRONMENT\n"
+	if err := os.WriteFile(configPath, []byte(configData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"context", "rename", "--config", configPath, "multiple.yaml", "new-context"}
+	if exitCode := Run(args, strings.NewReader(""), &stdout, &stderr); exitCode == 0 {
+		t.Fatalf("rename unexpectedly succeeded: %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "contains multiple contexts") {
+		t.Fatalf("unexpected multiple-context error: %s", stderr.String())
+	}
+}

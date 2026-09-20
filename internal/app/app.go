@@ -33,6 +33,9 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "alias" {
 		return runAlias(args[1:], stdout, stderr, defaultConfigPath, legacyPath)
 	}
+	if len(args) > 0 && args[0] == "context" {
+		return runContext(args[1:], stdout, stderr, defaultConfigPath, defaultKubeDir, legacyPath)
+	}
 	return runList(args, stdout, stderr, defaultConfigPath, defaultKubeDir, legacyPath)
 }
 
@@ -48,6 +51,7 @@ func runList(args []string, stdout, stderr io.Writer, defaultConfigPath, default
 		fmt.Fprintln(stderr, "Usage: kctx [options] [context keyword]")
 		fmt.Fprintln(stderr, "       kctx config [--config path]")
 		fmt.Fprintln(stderr, "       kctx alias set [--config path] <context> [value]")
+		fmt.Fprintln(stderr, "       kctx context rename [options] <kubeconfig-file> <new-context>")
 		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "List kubeconfig files and their contexts. The keyword match is case-insensitive.")
 		fmt.Fprintln(stderr)
@@ -126,6 +130,105 @@ func runList(args []string, stdout, stderr io.Writer, defaultConfigPath, default
 		fmt.Fprintf(stderr, "kctx: write output: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+func runContext(args []string, stdout, stderr io.Writer, defaultConfigPath, defaultKubeDir, legacyPath string) int {
+	if len(args) == 0 || args[0] != "rename" {
+		fmt.Fprintln(stderr, "Usage: kctx context rename [options] <kubeconfig-file> <new-context>")
+		return 2
+	}
+
+	flags := flag.NewFlagSet("kctx context rename", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", defaultConfigPath, "configuration file to edit")
+	kubeDirFlag := flags.String("kube-dir", "", "override the configured kubeconfig directory")
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, "Usage: kctx context rename [options] <kubeconfig-file> <new-context>")
+		fmt.Fprintln(stderr)
+		fmt.Fprintln(stderr, "Find a kubeconfig by filename and rename its only context.")
+		fmt.Fprintln(stderr)
+		flags.PrintDefaults()
+	}
+	if err := flags.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if flags.NArg() != 2 {
+		flags.Usage()
+		return 2
+	}
+
+	filename := strings.TrimSpace(flags.Arg(0))
+	newName := strings.TrimSpace(flags.Arg(1))
+	if filename == "" || newName == "" {
+		fmt.Fprintln(stderr, "kctx context rename: filename and new context cannot be blank")
+		return 2
+	}
+	if filepath.Base(filename) != filename {
+		fmt.Fprintln(stderr, "kctx context rename: provide a filename, not a path")
+		return 2
+	}
+
+	settings, err := config.Load(*configPath, legacyPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "kctx context rename: %v\n", err)
+		return 1
+	}
+	kubeDir := settings.KubeconfigDir
+	if kubeDir == "" {
+		kubeDir = defaultKubeDir
+	}
+	if *kubeDirFlag != "" {
+		kubeDir = *kubeDirFlag
+	}
+
+	path := filepath.Join(kubeDir, filename)
+	contextNames, err := kube.ContextNames(path)
+	if err != nil {
+		fmt.Fprintf(stderr, "kctx context rename: %v\n", err)
+		return 1
+	}
+	if len(contextNames) == 0 {
+		fmt.Fprintf(stderr, "kctx context rename: kubeconfig %q does not contain a context\n", filename)
+		return 1
+	}
+	if len(contextNames) > 1 {
+		fmt.Fprintf(stderr, "kctx context rename: kubeconfig %q contains multiple contexts; expected exactly one:\n", filename)
+		for _, name := range contextNames {
+			fmt.Fprintf(stderr, "  %s\n", name)
+		}
+		return 1
+	}
+	oldName := contextNames[0]
+
+	oldAlias, hasOldAlias := settings.Alias.Values[oldName]
+	if _, hasNewAlias := settings.Alias.Values[newName]; hasOldAlias && hasNewAlias {
+		fmt.Fprintf(stderr, "kctx context rename: alias for target context %q already exists\n", newName)
+		return 1
+	}
+	if err := kube.RenameContext(path, oldName, newName); err != nil {
+		fmt.Fprintf(stderr, "kctx context rename: %v\n", err)
+		return 1
+	}
+
+	if hasOldAlias {
+		delete(settings.Alias.Values, oldName)
+		settings.Alias.Values[newName] = oldAlias
+		if err := config.Save(*configPath, settings); err != nil {
+			rollbackErr := kube.RenameContext(path, newName, oldName)
+			if rollbackErr != nil {
+				fmt.Fprintf(stderr, "kctx context rename: save alias: %v; rollback also failed: %v\n", err, rollbackErr)
+			} else {
+				fmt.Fprintf(stderr, "kctx context rename: save alias: %v; kubeconfig change was rolled back\n", err)
+			}
+			return 1
+		}
+	}
+
+	fmt.Fprintf(stdout, "Renamed context %s to %s in %s\n", oldName, newName, path)
 	return 0
 }
 

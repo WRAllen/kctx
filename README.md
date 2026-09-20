@@ -149,6 +149,16 @@ kctx alias set dev-cluster "   "
 kctx alias set dev-cluster "development cluster"
 ```
 
+根据 kubeconfig 文件名修改其中的 context：
+
+```bash
+kctx context rename new-cluster.yaml new-context
+```
+
+工具会在已配置的 kubeconfig 目录中查找 `new-cluster.yaml`，自动读取原 context，并将它改为 `new-context`。同时还会更新该文件的 `current-context`；如果原 context 配置过别名，别名也会迁移到新名称。
+
+为避免误改，该文件必须恰好包含一个 context。重命名还会拒绝空名称、路径参数、同名目标以及文件内已经存在的新 context。
+
 临时扫描另一个目录，不改变保存的默认设置：
 
 ```bash
@@ -190,4 +200,5 @@ kctx --version
 kctx --help
 kctx config --help
 kctx alias set --help
+kctx context rename --help
 ```
