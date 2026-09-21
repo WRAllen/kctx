@@ -159,3 +159,107 @@ func TestContextRenameRejectsMultipleContextsInFile(t *testing.T) {
 		t.Fatalf("unexpected multiple-context error: %s", stderr.String())
 	}
 }
+
+func TestDeleteRemovesFileAndAlias(t *testing.T) {
+	dir := t.TempDir()
+	kubeDir := filepath.Join(dir, "kube")
+	if err := os.Mkdir(kubeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kubeconfigPath := filepath.Join(kubeDir, "dev-cluster.yaml")
+	if err := os.WriteFile(kubeconfigPath, []byte("contexts:\n  - name: dev-cluster\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "config.yaml")
+	configData := "kubeconfig_dir: " + kubeDir + "\nalias:\n  name: ENVIRONMENT\n  values:\n    dev-cluster: development\n"
+	if err := os.WriteFile(configPath, []byte(configData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"delete", "--config", configPath, "dev-cluster"}
+	if exitCode := Run(args, strings.NewReader("y\r\n"), &stdout, &stderr); exitCode != 0 {
+		t.Fatalf("delete exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if _, err := os.Stat(kubeconfigPath); !os.IsNotExist(err) {
+		t.Fatalf("kubeconfig still exists or stat failed unexpectedly: %v", err)
+	}
+	settings, err := config.Load(configPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := settings.Alias.Values["dev-cluster"]; exists {
+		t.Fatalf("alias was not removed: %#v", settings.Alias.Values)
+	}
+}
+
+func TestDeleteCancellationKeepsFile(t *testing.T) {
+	dir := t.TempDir()
+	kubeconfigPath := filepath.Join(dir, "dev-cluster.yaml")
+	if err := os.WriteFile(kubeconfigPath, []byte("contexts:\n  - name: dev-cluster\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	configData := "kubeconfig_dir: " + dir + "\nalias:\n  name: ENVIRONMENT\n"
+	if err := os.WriteFile(configPath, []byte(configData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"delete", "--config", configPath, "dev-cluster"}
+	if exitCode := Run(args, strings.NewReader("n\n"), &stdout, &stderr); exitCode != 0 {
+		t.Fatalf("cancel exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if _, err := os.Stat(kubeconfigPath); err != nil {
+		t.Fatalf("cancelled deletion removed the file: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Cancelled") {
+		t.Fatalf("cancel output missing: %s", stdout.String())
+	}
+}
+
+func TestDeleteForceSkipsConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	kubeconfigPath := filepath.Join(dir, "dev-cluster.yaml")
+	if err := os.WriteFile(kubeconfigPath, []byte("contexts:\n  - name: dev-cluster\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("alias:\n  name: ENVIRONMENT\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"delete", "--force", "--config", configPath, "--kube-dir", dir, "dev-cluster"}
+	if exitCode := Run(args, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
+		t.Fatalf("forced delete exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if _, err := os.Stat(kubeconfigPath); !os.IsNotExist(err) {
+		t.Fatalf("forced deletion did not remove file: %v", err)
+	}
+}
+
+func TestDeleteRejectsFileWithMultipleContexts(t *testing.T) {
+	dir := t.TempDir()
+	kubeconfigPath := filepath.Join(dir, "shared.yaml")
+	content := "contexts:\n  - name: dev-cluster\n  - name: prod-cluster\n"
+	if err := os.WriteFile(kubeconfigPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("alias:\n  name: ENVIRONMENT\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"delete", "--force", "--config", configPath, "--kube-dir", dir, "dev-cluster"}
+	if exitCode := Run(args, strings.NewReader(""), &stdout, &stderr); exitCode == 0 {
+		t.Fatalf("delete unexpectedly succeeded: %s", stdout.String())
+	}
+	if _, err := os.Stat(kubeconfigPath); err != nil {
+		t.Fatalf("protected file was removed: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "contains other or duplicate contexts") {
+		t.Fatalf("unexpected refusal message: %s", stderr.String())
+	}
+}

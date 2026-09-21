@@ -82,16 +82,11 @@ func ContextNames(path string) ([]string, error) {
 	}
 
 	names := make([]string, 0, len(config.Contexts))
-	seen := make(map[string]struct{})
 	for _, item := range config.Contexts {
 		name := strings.TrimSpace(item.Name)
 		if name == "" {
 			continue
 		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
 		names = append(names, name)
 	}
 	return names, nil

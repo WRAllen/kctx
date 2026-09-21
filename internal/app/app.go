@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -36,6 +37,9 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "context" {
 		return runContext(args[1:], stdout, stderr, defaultConfigPath, defaultKubeDir, legacyPath)
 	}
+	if len(args) > 0 && args[0] == "delete" {
+		return runDelete(args[1:], stdin, stdout, stderr, defaultConfigPath, defaultKubeDir, legacyPath)
+	}
 	return runList(args, stdout, stderr, defaultConfigPath, defaultKubeDir, legacyPath)
 }
 
@@ -52,6 +56,7 @@ func runList(args []string, stdout, stderr io.Writer, defaultConfigPath, default
 		fmt.Fprintln(stderr, "       kctx config [--config path]")
 		fmt.Fprintln(stderr, "       kctx alias set [--config path] <context> [value]")
 		fmt.Fprintln(stderr, "       kctx context rename [options] <kubeconfig-file> <new-context>")
+		fmt.Fprintln(stderr, "       kctx delete [options] <context>")
 		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "List kubeconfig files and their contexts. The keyword match is case-insensitive.")
 		fmt.Fprintln(stderr)
@@ -130,6 +135,122 @@ func runList(args []string, stdout, stderr io.Writer, defaultConfigPath, default
 		fmt.Fprintf(stderr, "kctx: write output: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+func runDelete(args []string, stdin io.Reader, stdout, stderr io.Writer, defaultConfigPath, defaultKubeDir, legacyPath string) int {
+	flags := flag.NewFlagSet("kctx delete", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", defaultConfigPath, "configuration file to edit")
+	kubeDirFlag := flags.String("kube-dir", "", "override the configured kubeconfig directory")
+	force := flags.Bool("force", false, "delete without confirmation")
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, "Usage: kctx delete [options] <context>")
+		fmt.Fprintln(stderr)
+		fmt.Fprintln(stderr, "Delete the kubeconfig file that contains exactly this one context.")
+		fmt.Fprintln(stderr)
+		flags.PrintDefaults()
+	}
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if flags.NArg() != 1 {
+		flags.Usage()
+		return 2
+	}
+
+	contextName := strings.TrimSpace(flags.Arg(0))
+	if contextName == "" {
+		fmt.Fprintln(stderr, "kctx delete: context cannot be blank")
+		return 2
+	}
+	settings, err := config.Load(*configPath, legacyPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "kctx delete: %v\n", err)
+		return 1
+	}
+	kubeDir := settings.KubeconfigDir
+	if kubeDir == "" {
+		kubeDir = defaultKubeDir
+	}
+	if *kubeDirFlag != "" {
+		kubeDir = *kubeDirFlag
+	}
+
+	contexts, err := kube.Scan(kubeDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "kctx delete: %v\n", err)
+		return 1
+	}
+	var matches []string
+	for _, context := range contexts {
+		if context.Name == contextName {
+			matches = append(matches, context.Filepath)
+		}
+	}
+	if len(matches) == 0 {
+		fmt.Fprintf(stderr, "kctx delete: context %q was not found in %s\n", contextName, kubeDir)
+		return 1
+	}
+	if len(matches) > 1 {
+		fmt.Fprintf(stderr, "kctx delete: context %q exists in multiple files; refusing to delete:\n", contextName)
+		for _, match := range matches {
+			fmt.Fprintf(stderr, "  %s\n", match)
+		}
+		return 1
+	}
+	path := matches[0]
+	names, err := kube.ContextNames(path)
+	if err != nil {
+		fmt.Fprintf(stderr, "kctx delete: %v\n", err)
+		return 1
+	}
+	if len(names) != 1 || names[0] != contextName {
+		fmt.Fprintf(stderr, "kctx delete: %s contains other or duplicate contexts; refusing to delete:\n", path)
+		for _, name := range names {
+			fmt.Fprintf(stderr, "  %s\n", name)
+		}
+		return 1
+	}
+
+	if !*force {
+		fmt.Fprintf(stdout, "Delete kubeconfig %s for context %q? [y/N]: ", path, contextName)
+		answer, readErr := bufio.NewReader(stdin).ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			fmt.Fprintf(stderr, "kctx delete: read confirmation: %v\n", readErr)
+			return 1
+		}
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintln(stdout, "Cancelled")
+			return 0
+		}
+	}
+
+	oldAlias, hasAlias := settings.Alias.Values[contextName]
+	if hasAlias {
+		delete(settings.Alias.Values, contextName)
+		if err := config.Save(*configPath, settings); err != nil {
+			fmt.Fprintf(stderr, "kctx delete: remove alias: %v\n", err)
+			return 1
+		}
+	}
+	if err := os.Remove(path); err != nil {
+		if hasAlias {
+			settings.Alias.Values[contextName] = oldAlias
+			if restoreErr := config.Save(*configPath, settings); restoreErr != nil {
+				fmt.Fprintf(stderr, "kctx delete: delete file: %v; restoring alias also failed: %v\n", err, restoreErr)
+				return 1
+			}
+		}
+		fmt.Fprintf(stderr, "kctx delete: delete file: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "Deleted kubeconfig %s for context %s\n", path, contextName)
 	return 0
 }
 

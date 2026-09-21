@@ -159,6 +159,20 @@ kctx context rename new-cluster.yaml new-context
 
 为避免误改，该文件必须恰好包含一个 context。重命名还会拒绝空名称、路径参数、同名目标以及文件内已经存在的新 context。
 
+根据 context 删除对应的 kubeconfig 文件：
+
+```bash
+kctx delete dev-cluster
+```
+
+删除前会显示完整文件路径并要求确认。只有 context 恰好对应一个文件，并且该文件只包含这一个 context 时才允许删除；对应的别名也会一起清理。
+
+在脚本中可以使用 `--force` 跳过确认：
+
+```bash
+kctx delete --force dev-cluster
+```
+
 临时扫描另一个目录，不改变保存的默认设置：
 
 ```bash
@@ -201,4 +215,5 @@ kctx --help
 kctx config --help
 kctx alias set --help
 kctx context rename --help
+kctx delete --help
 ```
